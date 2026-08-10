@@ -1,20 +1,45 @@
 import os
+import requests
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
+
+CLIENT_ID = os.environ.get("TIENDANUBE_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("TIENDANUBE_CLIENT_SECRET")
 
 @app.route("/", methods=["GET"])
 def home():
     return "Catalogo Importados API funcionando", 200
 
 @app.route("/tiendanube/callback", methods=["GET"])
-def callback():
+def tiendanube_callback():
     code = request.args.get("code")
+
     if not code:
         return "Falta el codigo de autorizacion", 400
 
-    # Por seguridad no mostramos ni guardamos credenciales acá.
-    return "Aplicacion autorizada correctamente. Ya podes cerrar esta ventana.", 200
+    response = requests.post(
+        "https://www.tiendanube.com/apps/authorize/token",
+        json={
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "grant_type": "authorization_code",
+            "code": code
+        },
+        timeout=30
+    )
+
+    if response.status_code != 200:
+        return f"Error al obtener access token: {response.text}", 400
+
+    data = response.json()
+
+    return jsonify({
+        "ok": True,
+        "user_id": data.get("user_id"),
+        "scope": data.get("scope"),
+        "message": "Tiendanube conectada correctamente"
+    })
 
 @app.route("/webhooks/store-redact", methods=["POST"])
 def store_redact():
