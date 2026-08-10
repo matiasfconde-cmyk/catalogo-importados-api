@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from flask import Flask, request, jsonify, redirect, url_for, render_template_string
 
@@ -25,6 +26,13 @@ ORDEN_CATEGORIAS = [
     "NIÑOS",
     "ENTREGA INMEDIATA",
 ]
+
+SUBTITULOS_CATEGORIAS = {
+    "MUJER": "SPORT • URBAN • DENIM",
+    "HOMBRE": "SPORT • URBAN • STREET",
+    "NIÑOS": "SPORT • URBAN • KIDS",
+    "ENTREGA INMEDIATA": "STOCK DISPONIBLE • ENTREGA RÁPIDA",
+}
 
 AUTH = {
     "access_token": None,
@@ -223,6 +231,74 @@ def foto_principal(producto):
     return ""
 
 
+
+def limpiar_html(valor):
+    texto = texto_localizado(valor)
+    texto = re.sub(r"<br\s*/?>", " ", texto, flags=re.I)
+    texto = re.sub(r"<[^>]+>", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip()
+    return texto
+
+
+def _valor_variante_texto(valor):
+    if isinstance(valor, dict):
+        return str(
+            valor.get("es")
+            or valor.get("pt")
+            or valor.get("en")
+            or valor.get("value")
+            or valor.get("name")
+            or ""
+        ).strip()
+
+    return str(valor or "").strip()
+
+
+def obtener_talles(producto):
+    """
+    Intenta obtener talles desde las variantes de Tiendanube.
+    Si no encuentra talles claros, busca una referencia simple
+    dentro de la descripción del producto.
+    """
+    talles = []
+
+    for variante in producto.get("variants") or []:
+        for valor in variante.get("values") or []:
+            candidato = _valor_variante_texto(valor).upper()
+
+            if not candidato:
+                continue
+
+            # Talles habituales de indumentaria o numéricos.
+            if re.fullmatch(r"(XS|S|M|L|XL|XXL|XXXL|[0-9]{1,3})", candidato):
+                if candidato not in talles:
+                    talles.append(candidato)
+
+    if talles:
+        return " • ".join(talles)
+
+    descripcion = limpiar_html(producto.get("description"))
+
+    if not descripcion:
+        return ""
+
+    patrones = [
+        r"talles?\s*:?\s*([0-9]{1,3}\s*(?:al|a|-)\s*[0-9]{1,3})",
+        r"talles?\s*:?\s*((?:xs|s|m|l|xl|xxl|xxxl)\s*(?:al|a|-)\s*(?:xs|s|m|l|xl|xxl|xxxl))",
+        r"talles?\s*:?\s*((?:xs|s|m|l|xl|xxl|xxxl)(?:\s*,\s*(?:xs|s|m|l|xl|xxl|xxxl))+)",
+    ]
+
+    for patron in patrones:
+        coincidencia = re.search(patron, descripcion, flags=re.I)
+
+        if coincidencia:
+            valor = re.sub(r"\s+", " ", coincidencia.group(1)).strip().upper()
+            valor = valor.replace(" A ", " AL ").replace(" - ", " AL ")
+            return valor
+
+    return ""
+
+
 def preparar_catalogo():
     mapa_categorias = obtener_categorias()
     productos_raw = obtener_productos()
@@ -235,13 +311,17 @@ def preparar_catalogo():
         if not nombre:
             nombre = "PRODUCTO"
 
+        categoria = categoria_principal(producto, mapa_categorias)
+
         productos.append(
             {
                 "id": producto.get("id"),
                 "nombre": nombre.upper(),
                 "precio": obtener_precio(producto),
                 "foto": foto_principal(producto),
-                "categoria": categoria_principal(producto, mapa_categorias),
+                "categoria": categoria,
+                "talles": obtener_talles(producto),
+                "stock_inmediato": categoria == "ENTREGA INMEDIATA",
             }
         )
 
@@ -283,6 +363,10 @@ def construir_paginas(productos):
                 {
                     "numero": numero,
                     "categoria": categoria,
+                    "subtitulo": SUBTITULOS_CATEGORIAS.get(
+                        categoria,
+                        "IMPORTADOS AGRONOMÍA",
+                    ),
                     "productos": productos_categoria[inicio : inicio + 6],
                 }
             )
@@ -325,9 +409,9 @@ body {
     align-items: center;
     justify-content: center;
     gap: 18px;
-    padding: 14px;
+    padding: 14px 16px;
     background: #ffffff;
-    border-bottom: 1px solid #dfe3e8;
+    border-bottom: 1px solid #dde2e8;
     box-shadow: 0 4px 14px rgba(0,0,0,.07);
 }
 
@@ -341,11 +425,16 @@ body {
     border: 0;
     border-radius: 10px;
     background: #153D7A;
-    color: white;
+    color: #ffffff;
     font-size: 14px;
     font-weight: 800;
     padding: 13px 22px;
     cursor: pointer;
+    transition: .2s;
+}
+
+.print-button:hover {
+    background: #102f60;
 }
 
 .print-button:disabled {
@@ -355,8 +444,8 @@ body {
 
 .status {
     min-width: 120px;
-    font-size: 12px;
     color: #777;
+    font-size: 12px;
 }
 
 .page {
@@ -371,6 +460,10 @@ body {
     break-after: page;
 }
 
+/* ==========================================================
+   ENCABEZADO
+   ========================================================== */
+
 .header {
     position: absolute;
     left: 12mm;
@@ -380,84 +473,136 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-bottom: 1.5mm solid #153D7A;
-}
-
-.header::after {
-    content: "";
-    position: absolute;
-    left: 0;
-    bottom: -1.5mm;
-    width: 32mm;
-    height: 1.5mm;
-    background: #D91F2A;
 }
 
 .logo {
     display: block;
-    max-width: 49mm;
+    max-width: 50mm;
     max-height: 12mm;
     object-fit: contain;
 }
 
-.header-title {
+.header-right {
     text-align: right;
-    color: #555b64;
-    font-size: 9pt;
-    font-weight: 800;
-    letter-spacing: .7px;
+}
+
+.header-title {
+    color: #153D7A;
+    font-size: 8.8pt;
+    font-weight: 900;
+    letter-spacing: .9px;
+}
+
+.header-mini {
+    margin-top: 1mm;
+    color: #8a8f97;
+    font-size: 6.8pt;
+    font-weight: 700;
+    letter-spacing: .4px;
+}
+
+.brand-line {
+    position: absolute;
+    left: 12mm;
+    right: 12mm;
+    top: 22mm;
+    height: 1.2mm;
+    background: linear-gradient(
+        90deg,
+        #D91F2A 0 18%,
+        #153D7A 18% 100%
+    );
+}
+
+/* ==========================================================
+   CATEGORÍA
+   ========================================================== */
+
+.category-block {
+    position: absolute;
+    top: 28mm;
+    left: 12mm;
+    right: 12mm;
+    height: 12mm;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
 }
 
 .category {
-    position: absolute;
-    top: 27mm;
-    left: 12mm;
-    right: 12mm;
-    height: 11mm;
-    border-radius: 3mm;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #153D7A;
-    color: #ffffff;
-    font-size: 16pt;
+    color: #153D7A;
+    font-size: 18pt;
+    line-height: 1;
     font-weight: 900;
     letter-spacing: .5px;
 }
 
+.category-subtitle {
+    margin-top: 1.2mm;
+    color: #D91F2A;
+    font-size: 7.5pt;
+    line-height: 1;
+    font-weight: 800;
+    letter-spacing: 1.4px;
+}
+
+/* ==========================================================
+   PRODUCTOS
+   ========================================================== */
+
 .products {
     position: absolute;
-    top: 42mm;
+    top: 43mm;
     left: 12mm;
     right: 12mm;
     bottom: 19mm;
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     grid-template-rows: repeat(3, 1fr);
-    gap: 4mm;
+    column-gap: 6mm;
+    row-gap: 4mm;
 }
 
 .product {
+    position: relative;
     overflow: hidden;
     display: flex;
     flex-direction: column;
     align-items: center;
     background: #ffffff;
-    border: .35mm solid #e0e4e9;
-    border-radius: 3.5mm;
-    box-shadow: 0 1mm 3mm rgba(0,0,0,.045);
-    padding: 3mm 3mm 2.5mm;
+    border: .25mm solid #e7e9ed;
+    border-radius: 4mm;
+    padding: 3mm 3mm 2.8mm;
+}
+
+.product.stock {
+    border-color: #e6b7bb;
+}
+
+.stock-badge {
+    position: absolute;
+    top: 3mm;
+    left: 3mm;
+    z-index: 10;
+    padding: 1.4mm 2.4mm;
+    border-radius: 20mm;
+    background: #D91F2A;
+    color: #ffffff;
+    font-size: 6.4pt;
+    font-weight: 900;
+    letter-spacing: .7px;
 }
 
 .photo-box {
     width: 100%;
-    height: 57mm;
+    height: 55mm;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
     background: #ffffff;
-    border-radius: 2mm;
+    border-radius: 2.5mm;
 }
 
 .photo {
@@ -473,25 +618,38 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f4f5f7;
-    color: #8a8f98;
-    font-size: 9pt;
+    background: #f5f6f8;
+    color: #91969d;
+    font-size: 8pt;
     font-weight: 700;
 }
 
 .product-name {
     width: 100%;
-    min-height: 10mm;
-    margin-top: 2.2mm;
+    min-height: 9mm;
+    margin-top: 2mm;
     display: flex;
     align-items: center;
     justify-content: center;
     text-align: center;
-    font-size: 10.5pt;
-    line-height: 1.08;
+    font-size: 10pt;
+    line-height: 1.05;
     font-weight: 800;
-    color: #151515;
+    color: #171717;
     overflow: hidden;
+}
+
+.product-sizes {
+    min-height: 4.7mm;
+    margin-top: .8mm;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #747980;
+    font-size: 7.4pt;
+    line-height: 1;
+    font-weight: 700;
+    text-align: center;
 }
 
 .product-price {
@@ -499,10 +657,22 @@ body {
     padding-top: 1.3mm;
     text-align: center;
     color: #D91F2A;
-    font-size: 16pt;
+    font-size: 15.5pt;
     line-height: 1;
     font-weight: 900;
 }
+
+.price-line {
+    width: 17mm;
+    height: .7mm;
+    margin: 1.4mm auto 0;
+    border-radius: 2mm;
+    background: #153D7A;
+}
+
+/* ==========================================================
+   PIE
+   ========================================================== */
 
 .footer {
     position: absolute;
@@ -513,23 +683,33 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    border-top: .35mm solid #dfe3e7;
+    border-top: .3mm solid #dfe3e7;
     padding-top: 3mm;
-    font-size: 8.5pt;
+    font-size: 8pt;
     font-weight: 800;
 }
 
-.whatsapp {
+.footer-left {
     color: #153D7A;
 }
 
-.instagram {
+.footer-center {
     color: #D91F2A;
 }
 
-.page-number {
+.footer-right {
     color: #666;
+    text-align: right;
 }
+
+.footer-secondary {
+    color: #858a91;
+    font-weight: 700;
+}
+
+/* ==========================================================
+   IMPRESIÓN
+   ========================================================== */
 
 @media print {
     @page {
@@ -561,10 +741,6 @@ body {
     .page:last-child {
         page-break-after: auto;
     }
-
-    .product {
-        box-shadow: none;
-    }
 }
 </style>
 </head>
@@ -585,7 +761,6 @@ body {
     </div>
 </div>
 
-
 {% for pagina in paginas %}
 
 <section class="page">
@@ -593,34 +768,58 @@ body {
     <header class="header">
         <img class="logo" src="{{ logo_url }}" alt="Importados Agronomía">
 
-        <div class="header-title">
-            CATÁLOGO DE PRODUCTOS
+        <div class="header-right">
+            <div class="header-title">
+                CATÁLOGO DE PRODUCTOS
+            </div>
+
+            <div class="header-mini">
+                IMPORTADOS AGRONOMÍA
+            </div>
         </div>
     </header>
 
-    <div class="category">
-        {{ pagina.categoria }}
+    <div class="brand-line"></div>
+
+    <div class="category-block">
+        <div class="category">
+            {{ pagina.categoria }}
+        </div>
+
+        <div class="category-subtitle">
+            {{ pagina.subtitulo }}
+        </div>
     </div>
 
     <div class="products">
 
         {% for producto in pagina.productos %}
 
-        <article class="product">
+        <article class="product {% if producto.stock_inmediato %}stock{% endif %}">
+
+            {% if producto.stock_inmediato %}
+            <div class="stock-badge">
+                STOCK INMEDIATO
+            </div>
+            {% endif %}
 
             <div class="photo-box">
 
                 {% if producto.foto %}
+
                 <img
                     class="photo"
                     src="{{ producto.foto }}"
                     alt="{{ producto.nombre }}"
                     loading="eager"
                 >
+
                 {% else %}
+
                 <div class="no-photo">
                     FOTO NO DISPONIBLE
                 </div>
+
                 {% endif %}
 
             </div>
@@ -629,9 +828,17 @@ body {
                 {{ producto.nombre }}
             </div>
 
+            <div class="product-sizes">
+                {% if producto.talles %}
+                    Talles: {{ producto.talles }}
+                {% endif %}
+            </div>
+
             <div class="product-price">
                 {{ producto.precio }}
             </div>
+
+            <div class="price-line"></div>
 
         </article>
 
@@ -641,16 +848,19 @@ body {
 
     <footer class="footer">
 
-        <div class="whatsapp">
+        <div class="footer-left">
             WhatsApp {{ whatsapp }}
+            <span class="footer-secondary">
+                · Envíos a todo el país
+            </span>
         </div>
 
-        <div class="instagram">
+        <div class="footer-center">
             {{ instagram }}
         </div>
 
-        <div class="page-number">
-            Página {{ pagina.numero }} de {{ total_paginas }}
+        <div class="footer-right">
+            {{ pagina.numero }} / {{ total_paginas }}
         </div>
 
     </footer>
@@ -658,7 +868,6 @@ body {
 </section>
 
 {% endfor %}
-
 
 <script>
 async function esperarImagenes() {
@@ -707,6 +916,7 @@ window.addEventListener("load", async () => {
 </body>
 </html>
 """
+
 
 
 @app.route("/")
